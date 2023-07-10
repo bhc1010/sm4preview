@@ -5,7 +5,7 @@ from watchdog.events import FileSystemEventHandler
 from sm4preview import SM4File
 
 class Watcher:
-    DIRECTORY_TO_WATCH = r"C:\Users\Oppenheimer\Documents\Physics"
+    DIRECTORY_TO_WATCH = r"C:\Users\spmuser\OneDrive - USNH\Hollen Lab\Data\LEWIS"
 
     def __init__(self):
         self.observer = Observer()
