@@ -27,8 +27,14 @@ class SM4File:
         self.path = Path(src_path)
         self.file = spym.load(src_path)
         self.fig = None
+        self.type = None
 
-        data_vars = self.file.data_vars
+        try:
+            data_vars = self.file.data_vars
+        except:
+            print(f"Invalid file, no data_vars from {src_path}")
+            return
+
         if "Current" not in data_vars:
             self.type = SM4File.FileType.Image
         else:
@@ -40,7 +46,7 @@ class SM4File:
         match T:
             case SM4File.FileType.Image:
                 self._topography = RawImage(forward=self.file.Topography_Forward, reverse=self.file.Topography_Backward)
-                self._lia_map = RawImage(forward=self.file.LIA_Current_Forward, reverse=self.file.LIA_Current_Backward)
+                # self._lia_map = RawImage(forward=self.file.LIA_Current_Forward, reverse=self.file.LIA_Current_Backward)
             case SM4File.FileType.Spectra:
                 self._spec = RawSpec(current=self.file.Current, lia=self.file.LIA_Current)
             case _:
@@ -65,6 +71,7 @@ class SM4File:
                 save_path = os.path.join(save_dir, f'{self.fname}_{i}')
             
             plt.savefig(f'{save_path}.png', bbox_inches='tight', dpi=150)
+            plt.close()
 
         # if self.type == SM4File.FileType.Image:
         #     self.image_preview(self._lia_map.forward)
@@ -72,12 +79,12 @@ class SM4File:
 
     def image_preview(self, image: DataArray):
         self.fname = str(self.path.name).split('.')[0]
-        self.fig = plt.figure(figsize=(11.6, 10))
-        gs = self.fig.add_gridspec(6, 7, hspace=0., wspace=0.)
-        self.image_ax = self.fig.add_subplot(gs[0:4, 0:4])
-        self.info_ax = self.fig.add_subplot(gs[4:6, 0:4])
-        self.grid_ax = self.fig.add_subplot(gs[0:3, 4:7])
-        self.spec_ax = self.fig.add_subplot(gs[3:6, 4:7])
+        self.fig = plt.figure(figsize=(11.3, 10))
+        gs = self.fig.add_gridspec(nrows=100, ncols=7, hspace=0., wspace=0.)
+        self.image_ax = self.fig.add_subplot(gs[0:65, 0:4])
+        self.info_ax = self.fig.add_subplot(gs[65:100, 0:4])
+        self.grid_ax = self.fig.add_subplot(gs[0:53, 4:7])
+        self.spec_ax = self.fig.add_subplot(gs[53:100, 4:7])
         
         self.image_ax.axis('off')
         self.info_ax.spines[['top', 'bottom', 'left', 'right']].set_visible(False)
@@ -109,14 +116,24 @@ class SM4File:
         self.image_ax.set_ylabel(" ")
         
         ## Grid axis
-        self.grid_ax.set(xlim=(-1, 1), ylim=(-1, 1), aspect='equal')
+        self.grid_ax.set(xlim=(-1, 1), ylim=(-1.057, 1.057))
         self.grid_ax.axhline(0, lw=.5, ls='-', c='gray')
         self.grid_ax.axvline(0, lw=.5, ls='-', c='gray')
+        self.grid_ax.axvline(0.9775, lw=6.7, c='lightgray')
+        self.grid_ax.axvline(-0.975, lw=6.7, c='lightgray')
+        self.grid_ax.axhline(1.03, lw=6.7, c='lightgray')
+        self.grid_ax.axhline(-1.03, lw=6.7, c='lightgray')
         
+        match self._topography.forward.RHK_PiezoSensitivity_TubeCalibration:
+            case '10K':
+                calibration = 2220
+            case '300K':
+                calibration = 12600
+
         offset = 1e9 * np.array([image.RHK_Xoffset, image.RHK_Yoffset])
-        offset = offset - size
-        offset = offset / 1110
-        self.grid_ax.add_patch(Rectangle(offset, size/1110, size/1110, facecolor='none', edgecolor='red'))
+        offset = offset - size/2
+        offset = offset / (calibration / 2)
+        self.grid_ax.add_patch(Rectangle(offset, size/(calibration / 2), size/ (calibration / 2), facecolor='none', edgecolor='red'))
         
         ## Spectroscopy axis
         self.spec_ax.set_facecolor('lightgray')

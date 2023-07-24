@@ -30,10 +30,19 @@ class Handler(FileSystemEventHandler):
         if event.is_directory:
             return None
         elif event.event_type == 'created':
-            _, ext = os.path.splitext(event.src_path)
+            root, ext = os.path.splitext(event.src_path)
+            for banned in ['Memscope', '-FFT', '-Scope', '-IZ']:
+                if banned in root:
+                    return
             if ext == '.sm4':
-                sm4 = SM4File(event.src_path)
-                sm4.generate_preview()
+                print(f'Generating preview for {event.src_path}')
+                time.sleep(1)
+                try:
+                    sm4 = SM4File(event.src_path)
+                    sm4.generate_preview()
+                    del sm4
+                except Exception as e:
+                    print(e)
 
 if __name__ == '__main__':
     w = Watcher()
