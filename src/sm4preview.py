@@ -4,60 +4,64 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 from matplotlib.patches import Rectangle
+from matplotlib.colors import CenteredNorm
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
+
 from pathlib import Path
-from dataclasses import dataclass
 from xarray import DataArray
 from enum import Enum
 
-@dataclass
-class RawImage:
-    forward: DataArray
-    reverse: DataArray
-
-@dataclass
-class RawSpec:
-    current: DataArray
-    lia: DataArray
-
 class SM4File:
-    FileType = Enum("FileType", ["Image", "Spectra"])
+    FileType = Enum("FileType", ["Image", "dIdV", "IZ"])
     def __init__(self, src_path: str):
         self.path = Path(src_path)
+        self.fname = self.path.stem
         self.file = spym.load(src_path)
         self.fig = None
         self.type = None
 
-        try:
-            data_vars = self.file.data_vars
-        except:
-            print(f"Invalid file, no data_vars from {src_path}")
-            return
-
-        if "Current" not in data_vars:
+        if 'Current' in self.file.data_vars:
+            match self.file.Current.RHK_LineTypeName:
+                case 'RHK_LINE_IV_SPECTRUM':
+                    self.type = SM4File.FileType.dIdV
+                case 'RHK_LINE_IZ_SPECTRUM':
+                    self.type = SM4File.FileType.IZ
+        elif 'Topography_Forward' in self.file.data_vars:
             self.type = SM4File.FileType.Image
-        else:
-            self.type = SM4File.FileType.Spectra
 
-        self.parse_data(self.type)
+        if self.file is not None:
+            self.parse_data(self.type)
 
     def parse_data(self, T: FileType):
         match T:
             case SM4File.FileType.Image:
-                self._topography = RawImage(forward=self.file.Topography_Forward, reverse=self.file.Topography_Backward)
-                # self._lia_map = RawImage(forward=self.file.LIA_Current_Forward, reverse=self.file.LIA_Current_Backward)
-            case SM4File.FileType.Spectra:
-                self._spec = RawSpec(current=self.file.Current, lia=self.file.LIA_Current)
+                self._topography = self.file.Topography_Forward
+            case SM4File.FileType.dIdV:
+                self._spec = self.file.LIA_Current
+            case SM4File.FileType.IZ:
+                self._spec = self.file.Current
             case _:
                 pass
         
     def generate_preview(self):
         match self.type:
             case SM4File.FileType.Image:
-                self.image_preview(self._topography.forward)
-            case SM4File.FileType.Spectra:
-                self.spectra_preview()
+                self.image_preview(self._topography)
+            case SM4File.FileType.dIdV:
+                if len(self._spec.LIA_Current_y) > 0:
+                    try:
+                        self.spectra_preview()
+                    except ValueError as e:
+                        print(f"[ERROR] {self.fname} : {e}")
+                        self.fig = None
+            case SM4File.FileType.IZ:
+                if len(self._spec.Current_y) > 0:
+                    try:
+                        self.spectra_preview()
+                    except ValueError as e:
+                        print(f"[ERROR] {self.fname} : {e}")
+                        self.fig = None
 
         if self.fig is not None:
             save_dir = os.path.join(self.path.parent, 'sm4preview')
@@ -72,10 +76,6 @@ class SM4File:
             
             plt.savefig(f'{save_path}.png', bbox_inches='tight', dpi=150)
             plt.close()
-
-        # if self.type == SM4File.FileType.Image:
-        #     self.image_preview(self._lia_map.forward)
-        #     plt.savefig(f'{self.path.name}_ldos_map.png', bbox_inches='tight', dpi=150)
 
     def image_preview(self, image: DataArray):
         self.fname = str(self.path.name).split('.')[0]
@@ -93,7 +93,7 @@ class SM4File:
         self.grid_ax.tick_params(left = False, right = False , labelleft = False ,
                 labelbottom = False, bottom = False)
         
-        self.spec_ax.tick_params(left = False, right = False , labelleft = False, labelbottom = True, bottom = True)
+        self.spec_ax.tick_params(left = False, labelleft = False, labelbottom = True, bottom = True)
         
         ## image axis
         image.spym.align()
@@ -123,12 +123,23 @@ class SM4File:
         self.grid_ax.axvline(-0.975, lw=6.7, c='lightgray')
         self.grid_ax.axhline(1.03, lw=6.7, c='lightgray')
         self.grid_ax.axhline(-1.03, lw=6.7, c='lightgray')
-        
-        match self._topography.forward.RHK_PiezoSensitivity_TubeCalibration:
+
+        match image.RHK_PiezoSensitivity_TubeCalibration:
             case '10K':
                 calibration = 2220
+            case '100K':
+                calibration = 2220
+            case 'Nitrogen':
+                calibration = 2220
+            case 'Helium':
+                calibration = 2200
             case '300K':
                 calibration = 12600
+            case 'Room Temperature':
+                calibration = 12600
+            case _:
+                print(f'Tube Calibration not accounted for: {image.RHK_PiezoSensitivity_TubeCalibration}')
+                calibration = 2200
 
         offset = 1e9 * np.array([image.RHK_Xoffset, image.RHK_Yoffset])
         offset = offset - size/2
@@ -139,8 +150,13 @@ class SM4File:
         self.spec_ax.set_facecolor('lightgray')
         self.spec_ax.yaxis.set_label_position("right")
         self.spec_ax.tick_params(axis="x", direction='in', top=True)
-        self.spec_ax.set_xlabel('Voltage (mV)')
-        self.spec_ax.set_ylabel('dI/dV (arb)')
+        match self.type:
+            case SM4File.FileType.dIdV:
+                self.spec_ax.set_xlabel('Voltage (mV)')
+                self.spec_ax.set_ylabel('dI/dV (arb)')
+            case SM4File.FileType.IZ:
+                self.spec_ax.set_xlabel('Tip height (nm)')
+                self.spec_ax.set_ylabel('Distance (nm)')
 
         ## Info panel
         self.info_ax.set_facecolor('gray')
@@ -149,82 +165,149 @@ class SM4File:
         self.info_ax.text(0.01, 0.7, f'Image width: {size} nm', c='white')
         self.info_ax.text(0.01, 0.6, f'Bias: {image.bias:.3f} V', c='white')
         self.info_ax.text(0.01, 0.5, f'Current: {image.setpoint} A', c='white')
+        # self.info_ax.text(0.01, 0.4, f'Line time: {image.line}')
 
     def spectra_preview(self):
+        if len(self.path.name.split("_")) < 7:
+            return None
+        
         src_dir = self.path.parent
         files = [x for x in os.listdir(src_dir) if x.endswith('.sm4')]
-        current_year = str(datetime.date.today().year)
-        dates = [current_year + x.split(current_year)[-1].split('.')[0] for x in files]
-        dates = [datetime.datetime(*[int(d) for d in x.split("_")]) for x in dates]
+        dates = [x.split('.')[0].split('_') for x in files]
+        dates = [x[-7:] for x in dates if len(x) > 7]
+        dates = [datetime.datetime(*[int(d) for d in date]) for date in dates]
         dates = list(zip(dates, range(len(dates))))
         dates_sorted, permuted_indices = list(zip(*sorted(dates)))
-        file_date = current_year + self.path.name.split(current_year)[-1].split('.')[0]
-        file_date = datetime.datetime(*[int(d) for d in file_date.split("_")])
+        file_date = self.path.name.split('.')[0].split('_')[-7:]  # Date of the current file
+        file_date = datetime.datetime(*[int(d) for d in file_date])
         
         files = [files[i] for i in list(permuted_indices)]
-        idx = dates_sorted.index(file_date)
+        idx = dates_sorted.index(file_date) # index of the current file in the date ordered list
         topography = None
 
-        while idx > 0:
-            f = spym.load(os.path.join(src_dir, files[idx-1]))
-            if 'Topography_Forward' in f.data_vars:
-                if 'Current' not in f.data_vars:
+        while idx >= 0:
+            f = spym.load(os.path.join(src_dir, files[idx]))
+            if f is None:
+                idx -= 1
+            elif 'data_vars' in f.__dir__():
+                if 'Topography_Forward' in f.data_vars:
                     topography = f.Topography_Forward
-                    line_average = np.average(topography.data, axis=1)
-                    num_zeros = len(topography.data) - np.count_nonzero(line_average)
-                    if num_zeros == 0:
-                        break
-                    else:
-                        topography = None
-            idx -= 1
+                    if topography.data.shape[0] == topography.data.shape[1]: ### There is no full proof way to tell the difference between data that has only dIdV and data that has both image and dIdV - checking if the image is square is the closest option
+                        line_average = np.average(topography.data, axis=1)
+                        num_zeros = len(topography.data) - np.count_nonzero(line_average)
+                        if num_zeros == 0:
+                            break
+                        else:
+                            topography = None
+                idx -= 1
+            else:
+                idx -= 1
 
         if topography is not None:
             self.image_preview(topography)
-            self.fname = str(files[idx-1]).split('.')[0] + '_spec'
+            match self.type:
+                case SM4File.FileType.dIdV:
+                    self.plot_spectra(self._spec, topography)
+                case SM4File.FileType.IZ:
+                    self.plot_iz(self._spec, topography)
 
-            ldos = self._spec.lia
-            self.plot_spectra(ldos, topography)
 
     def plot_spectra(self, ldos: DataArray, topography: DataArray):
+        if 'RHK_SpecDrift_Xcoord' not in ldos.attrs:
+            return
+        
+        ## Spectra
         ldos_coords = self.unique_coordinates(zip(ldos.RHK_SpecDrift_Xcoord, ldos.RHK_SpecDrift_Ycoord))
+        N = len(ldos_coords)
+        if N == 0:
+            return
+
         xsize = ldos.RHK_Xsize
         total = ldos.RHK_Ysize
-        N = len(ldos_coords)
         repetitions = total//N
-
         x = ldos.LIA_Current_x.data * 1e3
-        ldos_ave = np.array([np.zeros(xsize)]*N)
-        for i in range(N):
-            for j in range(repetitions):
-                ldos_ave[i] += ldos.data.transpose()[i*repetitions+j]
-            ldos_ave[i] /= repetitions
+        ldos_ave = np.reshape(ldos.data, (xsize, N, repetitions))
+        ldos_ave = np.mean(ldos_ave, axis=2).T
 
-        skip = np.max(ldos_ave) / 10
-        offset = np.flip([i * skip for i in range(N)])
-        # offset = np.zeros(N)
-
-        colors = plt.cm.jet(np.linspace(0, 1, N))
-        
-        for (i,dIdV) in enumerate(ldos_ave):
-            self.spec_ax.plot(x, dIdV + offset[i], c=colors[i])
-
-        self.spec_ax.set_facecolor('white')
-
-        ## Plot points
+        ## Spec Coordinates
         xoffset = topography.RHK_Xoffset
         yoffset = topography.RHK_Yoffset
-        offset = np.array([xoffset, yoffset])
         xscale = topography.RHK_Xscale
         yscale = topography.RHK_Yscale
         xsize = topography.RHK_Xsize
         ysize = topography.RHK_Ysize
         width = np.abs(xscale * xsize)
         height = np.abs(yscale * ysize)
-        offset += 0.5 * np.array([-width, -height])
 
-        for (i, real_coord) in enumerate(ldos_coords):
+        offset = np.array([xoffset, yoffset]) + 0.5 * np.array([-width, -height])
+
+        ## Plot
+        skip = np.max(ldos_ave) / 10
+        waterfall_offset = np.flip([i * skip for i in range(N)])
+        colors = plt.cm.jet(np.linspace(0, 1, N))
+        
+        self.spec_ax.set_facecolor('white')
+        for (i, (dIdV, real_coord)) in enumerate(zip(ldos_ave, ldos_coords)):
             view_coord = np.array(real_coord - offset) * 1e9
+
+            self.spec_ax.plot(x, dIdV + waterfall_offset[i], c=colors[i])
             self.image_ax.plot(view_coord[0], view_coord[1], marker="o", c=colors[i])
+
+    def plot_iz(self, iz: DataArray, topography: DataArray):
+        if self.type is not SM4File.FileType.IZ:
+            print("File contains no IZ data.")
+            return 
+        
+        if 'RHK_SpecDrift_Xcoord' not in iz.attrs:
+            print('RHK_SpecDrift_Xcoord not in Current attributes.')
+            return
+
+        coords = self.unique_coordinates(zip(iz.RHK_SpecDrift_Xcoord, iz.RHK_SpecDrift_Ycoord))
+        N = len(coords)
+        if N == 0:
+            print("No IZ data found.")
+            return
+
+        xsize = iz.RHK_Xsize
+        total = iz.RHK_Ysize
+        repetitions = total//N
+        x = iz.Current_x.data * 1e9
+        iz_data = iz.data.reshape(xsize, N, repetitions).T
+        approach = iz_data[::2, :].mean(axis=0)
+        retract = iz_data[1::2, :].mean(axis=0)
+        iz_ave = np.flip(retract - approach)
+
+        ## Spec Coordinates
+        xoffset = topography.RHK_Xoffset
+        yoffset = topography.RHK_Yoffset
+        xscale = topography.RHK_Xscale
+        yscale = topography.RHK_Yscale
+        xsize = topography.RHK_Xsize
+        ysize = topography.RHK_Ysize
+        width = np.abs(xscale * xsize)
+        height = np.abs(yscale * ysize)
+
+        offset = np.array([xoffset, yoffset]) + 0.5 * np.array([-width, -height])
+        line_cut = (coords[-1][0] - coords[0][0], coords[-1][1] - coords[0][1])
+        line_length = np.sqrt(line_cut[0]**2 + line_cut[1]**2) * 1e9
+
+        ## Plot
+        if len(coords) > 1:
+            aspect = abs(x[-1] - x[0]) / line_length
+            self.spec_ax.yaxis.set_ticks_position('right')
+            self.spec_ax.tick_params(axis="y", direction='in')
+            self.spec_ax.imshow(iz_ave, cmap='seismic', aspect=aspect, extent=[x[0], x[-1], 0, line_length], norm=CenteredNorm())
+            
+            (x1, y1) = np.array(coords[0] - offset) * 1e9
+            (x2, y2) = np.array(coords[-1] - offset) * 1e9
+            self.image_ax.arrow(x1, y1, x2 - x1, y2 - y1, lw=0.1, width=0.2, length_includes_head=True, edgecolor='w', facecolor='w')
+        else:
+            self.spec_ax.set_facecolor('white')
+            self.spec_ax.plot(x, approach[0])
+            self.spec_ax.plot(x, retract[0])
+
+            view_coord = np.array(coords[0] - offset) * 1e9
+            self.image_ax.plot(view_coord[0], view_coord[1], marker="o")
 
     def unique_coordinates(self, coords):
         seen = set()
